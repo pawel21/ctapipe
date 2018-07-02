@@ -4,8 +4,6 @@
 Hillas-style moment-based shower image parametrization.
 """
 
-from collections import namedtuple
-
 import astropy.units as u
 import numpy as np
 from astropy.coordinates import Angle
@@ -14,20 +12,16 @@ from astropy.units import Quantity
 from ctapipe.instrument import CameraGeometry
 from ..io.containers import HillasParametersContainer
 
+
 __all__ = [
-    'MomentParameters',
     'hillas_parameters',
     'hillas_parameters_1',
     'hillas_parameters_2',
     'hillas_parameters_3',
     'hillas_parameters_4',
+    'hillas_parameters_5',
     'HillasParameterizationError',
 ]
-
-MomentParameters = namedtuple(
-    "MomentParameters",
-    "size,cen_x,cen_y,length,width,r,phi,psi,miss,skewness,kurtosis"
-)
 
 
 class HillasParameterizationError(RuntimeError):
@@ -53,7 +47,7 @@ def hillas_parameters_1(geom: CameraGeometry, image):
 
     Returns
     -------
-    hillas_parameters : `MomentParameters`
+    hillas_parameters : `HillasParametersContainer`
     """
     unit = Quantity(geom.pix_x).unit
     pix_x = Quantity(np.asanyarray(geom.pix_x, dtype=np.float64)).value
@@ -116,7 +110,7 @@ def hillas_parameters_1(geom: CameraGeometry, image):
     width = 0. if width_2 < 0. else np.sqrt(width_2)
     length = 0. if length_2 < 0. else np.sqrt(length_2)
 
-    miss = np.abs(b / np.sqrt(1 + a * a))
+    # miss = np.abs(b / np.sqrt(1 + a * a))
     r = np.sqrt(mean_x * mean_x + mean_y * mean_y)
     phi = np.arctan2(mean_y, mean_x)
 
@@ -150,17 +144,16 @@ def hillas_parameters_1(geom: CameraGeometry, image):
     # azwidth_2 = m_qq - m_q * m_q
     # azwidth = np.sqrt(azwidth_2)
 
-    return MomentParameters(size=size,
-                            cen_x=mean_x * unit,
-                            cen_y=mean_y * unit,
-                            length=length * unit,
-                            width=width * unit,
-                            r=r * unit,
-                            phi=Angle(phi * u.rad),
-                            psi=Angle(delta * u.rad),
-                            miss=miss * unit,
-                            skewness=skewness,
-                            kurtosis=kurtosis)
+    return HillasParametersContainer(
+        x=mean_x * unit, y=mean_y * unit,
+        r=r * unit, phi=Angle(phi * u.rad),
+        intensity=size,
+        length=length * unit,
+        width=width * unit,
+        psi=Angle(delta * u.rad),
+        skewness=skewness,
+        kurtosis=kurtosis
+    )
 
 
 def hillas_parameters_2(geom: CameraGeometry, image):
@@ -180,7 +173,7 @@ def hillas_parameters_2(geom: CameraGeometry, image):
 
     Returns
     -------
-    hillas_parameters : `MomentParameters`
+    hillas_parameters : `HillasParametersContainer`
     """
 
     if type(geom.pix_x) == Quantity:
@@ -205,12 +198,6 @@ def hillas_parameters_2(geom: CameraGeometry, image):
         raise (HillasParameterizationError(("Empty pixels!"
                                             "Cannot calculate image parameters."
                                             "Exiting...")))
-
-    pixdata = np.row_stack([pix_x,
-                            pix_y,
-                            pix_x * pix_x,
-                            pix_x * pix_y,
-                            pix_y * pix_y])
 
     # Compute image moments (done in a bit faster way, but putting all
     # into one 2D array, where each row will be summed to calculate a
@@ -309,12 +296,15 @@ def hillas_parameters_2(geom: CameraGeometry, image):
                 vy4 * spsi2 * spsi2)
         kurtosis = kurt / (length * length * length * length)
 
-    return MomentParameters(size=size, cen_x=xm * unit, cen_y=ym * unit,
-                            length=length * unit, width=width * unit,
-                            r=rr * unit,
-                            phi=Angle(phi), psi=Angle(psi),
-                            miss=miss * unit, skewness=skewness,
-                            kurtosis=kurtosis)
+    return HillasParametersContainer(
+        x=xm * unit, y=ym * unit,
+        r=rr * unit, phi=Angle(phi),
+        intensity=size,
+        length=length * unit, width=width * unit,
+        psi=Angle(psi),
+        skewness=skewness,
+        kurtosis=kurtosis,
+    )
 
 
 def hillas_parameters_3(geom: CameraGeometry, image):
@@ -333,7 +323,7 @@ def hillas_parameters_3(geom: CameraGeometry, image):
 
     Returns
     -------
-    hillas_parameters : `MomentParameters`
+    hillas_parameters : `HillasParametersContainer`
     """
 
     if type(geom.pix_x) == Quantity:
@@ -481,15 +471,19 @@ def hillas_parameters_3(geom: CameraGeometry, image):
 
     # Code to de-interface with historical code
 
-    return MomentParameters(size=size, cen_x=m_x * unit, cen_y=m_y * unit,
-                            length=length * unit, width=width * unit,
-                            r=r * unit, phi=Angle(phi * u.rad),
-                            psi=Angle(psi * u.rad),
-                            miss=miss * unit,
-                            skewness=skewness, kurtosis=kurtosis)
+    return HillasParametersContainer(
+        x=m_x * unit, y=m_y * unit,
+        r=r * unit, phi=Angle(phi * u.rad),
+        intensity=size,
+        length=length * unit,
+        width=width * unit,
+        psi=Angle(psi * u.rad),
+        skewness=skewness,
+        kurtosis=kurtosis,
+    )
 
 
-def hillas_parameters_4(geom: CameraGeometry, image, container=False):
+def hillas_parameters_4(geom: CameraGeometry, image):
     """Compute Hillas parameters for a given shower image.
 
     As for hillas_parameters_3 (old Whipple Fortran code), but more Pythonized
@@ -509,20 +503,13 @@ def hillas_parameters_4(geom: CameraGeometry, image, container=False):
 
     Returns
     -------
-    MomentParameters:
-        tuple of hillas parameters
     HillasParametersContainer:
         container of hillas parametesr
     """
-
-    if not isinstance(geom, CameraGeometry):
-        raise ValueError("Hillas Parameters API has changed: hillas_parameters("
-                         "geom, image). Please update your code")
-
     unit = geom.pix_x.unit
 
     # MP: Actually, I don't know why we need to strip the units... shouldn'
-    # the calculations all work with them?'''
+    # the calculations all work with them?
 
     pix_x = Quantity(np.asanyarray(geom.pix_x, dtype=np.float64)).value
     pix_y = Quantity(np.asanyarray(geom.pix_y, dtype=np.float64)).value
@@ -639,23 +626,93 @@ def hillas_parameters_4(geom: CameraGeometry, image, container=False):
                 vy4 * spsi2 * spsi2)
         kurtosis = kurt / (length * length * length * length)
 
-    if container:
-        return HillasParametersContainer(x=m_x * unit, y=m_y * unit, r=r * unit,
-                                         phi=Angle(phi * u.rad),
-                                         intensity=size,
-                                         length=length * unit,
-                                         width=width * unit,
-                                         psi=Angle(psi * u.rad),
-                                         skewness=skewness,
-                                         kurtosis=kurtosis)
-    else:
-        return MomentParameters(size=size, cen_x=m_x * unit, cen_y=m_y * unit,
-                                length=length * unit, width=width * unit,
-                                r=r * unit,
-                                phi=Angle(phi * u.rad),
-                                psi=Angle(psi * u.rad),
-                                miss=miss * unit,
-                                skewness=skewness, kurtosis=kurtosis)
+    return HillasParametersContainer(
+        x=m_x * unit, y=m_y * unit,
+        r=r * unit, phi=Angle(phi * u.rad),
+        intensity=size,
+        length=length * unit,
+        width=width * unit,
+        psi=Angle(psi * u.rad),
+        skewness=skewness,
+        kurtosis=kurtosis,
+    )
+
+
+def hillas_parameters_5(geom: CameraGeometry, image):
+    """
+    Compute Hillas parameters for a given shower image.
+
+    Implementation uses a PCA analogous to the implementation in
+    src/main/java/fact/features/HillasParameters.java
+    from
+    https://github.com/fact-project/fact-tools
+
+    Parameters
+    ----------
+    geom: ctapipe.instrument.CameraGeometry
+        Camera geometry
+    image : array_like
+        Pixel values
+
+    Returns
+    -------
+    HillasParametersContainer:
+        container of hillas parametesr
+    """
+    unit = geom.pix_x.unit
+    pix_x = Quantity(np.asanyarray(geom.pix_x, dtype=np.float64)).value
+    pix_y = Quantity(np.asanyarray(geom.pix_y, dtype=np.float64)).value
+    image = np.asanyarray(image, dtype=np.float64)
+    assert pix_x.shape == pix_y.shape == image.shape, 'Image and pixel shape do not match'
+
+    size = np.sum(image)
+
+    if size == 0.0:
+        raise HillasParameterizationError('size=0, cannot calculate HillasParameters')
+
+    # calculate the cog as the mean of the coordinates weighted with the image
+    cog_x = np.average(pix_x, weights=image)
+    cog_y = np.average(pix_y, weights=image)
+
+    # polar coordinates of the cog
+    cog_r = np.linalg.norm([cog_x, cog_y])
+    cog_phi = np.arctan2(cog_y, cog_x)
+
+    # do the PCA for the hillas parameters
+    delta_x = pix_x - cog_x
+    delta_y = pix_y - cog_y
+
+    # The ddof=0 makes this comparable to the other methods,
+    # but ddof=1 should be more correct, mostly affects small showers
+    # on a percent level
+    cov = np.cov(delta_x, delta_y, aweights=image, ddof=0)
+    eig_vals, eig_vecs = np.linalg.eigh(cov)
+
+    # width and length are eigen values of the PCA
+    width, length = np.sqrt(eig_vals)
+
+    # psi is the angle of the eigenvector to length to the x-axis
+    psi = np.arctan2(eig_vecs[1, 1], eig_vecs[0, 1])
+
+    # calculate higher order moments along shower axes
+    longitudinal = delta_x * np.cos(psi) + delta_y * np.sin(psi)
+
+    m3_long = np.average(longitudinal**3, weights=image)
+    skewness_long = m3_long / length**3
+
+    m4_long = np.average(longitudinal**4, weights=image)
+    kurtosis_long = m4_long / length**4
+
+    return HillasParametersContainer(
+        x=cog_x * unit, y=cog_y * unit,
+        r=cog_r * unit, phi=Angle(cog_phi * u.rad),
+        intensity=size,
+        length=length * unit,
+        width=width * unit,
+        psi=Angle(psi * u.rad),
+        skewness=skewness_long,
+        kurtosis=kurtosis_long,
+    )
 
 
 # use the 4 version by default.
