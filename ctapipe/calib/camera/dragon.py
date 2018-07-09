@@ -65,14 +65,27 @@ def get_first_capacitor(event, nr):
     return fc
 
 
+# nr - number module
 def remove_pedestal(event, pedestal, nr):
+    """
+
+    Parameters
+    ----------
+    event: container
+        A `ctapipe` event container
+    """
     first_cap = get_first_capacitor(event, nr)
+    hg = 0
+    lg = 1
     n_pixels = 7
     size4drs = 4 * 1024
     roisize = 40
-    waveform = event.r0.tel[0].waveform[:, nr * 7:(nr + 1) * 7, :]
+    offset = 300
+
     for i in range(0, 2):
         for j in range(0, n_pixels):
             for k in range(0, roisize):
-                position = int(k + first_cap[i, j])
-                waveform[i, j, k] -= 1#int(pedestal.meanped[i, j, position])
+                position = int((k + first_cap[i, j]) % size4drs)
+                val = event.r0.tel[0].waveform[i, nr * 7:(nr + 1) * 7, k][j] - int(
+                pedestal.meanped[i, j, position]) + offset
+                event.r0.tel[0].waveform[i, nr * 7:(nr + 1) * 7, k][j] = val
