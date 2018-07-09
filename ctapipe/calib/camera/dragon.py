@@ -15,7 +15,7 @@ class Dragon():
 
 
 class DragonPedestal:
-    n_channels = 7
+    n_pixels = 7
     roisize = 40
     size4drs = 4*1024
     high_gain = 0
@@ -23,8 +23,9 @@ class DragonPedestal:
 
     def __init__(self):
         self.first_capacitor = np.zeros((2, 8))
-        self.meanped = np.zeros((2, self.n_channels, self.size4drs))
-        self.numped = np.zeros((2, self.n_channels, self.size4drs))
+        self.meanped = np.zeros((2, self.n_pixels, self.size4drs))
+        self.numped = np.zeros((2, self.n_pixels, self.size4drs))
+        self.rms = np.zeros((2, self.n_pixels, self.size4drs))
 
     def fill_pedestal_event(self, event, nr):
         first_cap = event.lst.tel[0].evt.first_capacitor_id[nr * 8:(nr + 1) * 8]
@@ -36,17 +37,20 @@ class DragonPedestal:
             self.first_capacitor[self.low_gain, channel_lg] = first_cap[channel_lg]
         waveform = event.r0.tel[0].waveform[:, nr * 7:(nr + 1) * 7, :]
         for i in range(0, 2):
-            for j in range(0, self.n_channels):
+            for j in range(0, self.n_pixels):
                 fc = int(self.first_capacitor[i, j])
                 for k in range(0, self.roisize):
                     posads = int((k+fc)%self.size4drs)
                     val = waveform[i, j, k]
                     self.meanped[i, j, posads] += val
                     self.numped[i, j, posads] += 1
+                    self.rms[i, j, posads] += val**2
 
     def finalize_pedestal(self):
         try:
             self.meanped = self.meanped/self.numped
+            self.rms = self.rms/self.numped
+            self.rms = np.sqrt(self.rms - self.meanped**2)
         except Exception as err:
             print(err)
 
