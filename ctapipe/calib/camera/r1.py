@@ -191,6 +191,93 @@ class HESSIOR1Calibrator(CameraR1Calibrator):
                 event.r1.tel[telid].waveform = calibrated
 
 
+class LSTR1Calibrator(CameraR1Calibrator):
+
+    pedestal_path = Unicode(
+        '',
+        allow_none=True,
+        help='Path to the LST pedestal file'
+    ).tag(config=True)
+
+    def __init__(self, config=None, tool=None, **kwargs):
+        super().__init__(config=config, tool=tool, **kwargs)
+        self.log.info(self.pedestal_path)
+
+        self.telid = 0
+
+        self._load_calib()
+
+    def calibrate(self, event):
+        samples = event.r0.tel[self.telid].waveform
+        event.r1.tel[self.telid].waveform = samples.astype('float32')
+
+        n_pixels = 7
+        size4drs = 4 * 1024
+        roisize = 40
+        offset = 300
+        number_of_modules = event.lst.tel[0].svc.num_modules
+        for nr in range(0, number_of_modules):
+            first_cap = self._get_first_capacitor(event, nr)
+            for i in range(0, 2):
+                for j in range(0, n_pixels):
+                    for k in range(0, roisize):
+                        position = int((k + first_cap[i, j]) % size4drs)
+                        val = (event.r0.tel[0].waveform[i, nr * 7:(nr + 1) * 7, k][j] - int(
+                            self.pedestal_value_array[nr, i, j, position])) + offset
+                        event.r1.tel[self.telid].waveform[i, nr * 7:(nr + 1) * 7, k][j] = val
+        self.log.info("Calibrate")
+
+    def _load_calib(self):
+        """
+        If a pedestal file has been supplied, create a array with
+        pedestal value . If it hasn't then point calibrate to
+        fake_calibrate, where nothing is done to the waveform.
+        """
+        if self.pedestal_path:
+            self.pedestal_value_array = np.zeros((262, 2, 7, 4096))
+            with open(self.pedestal_path, "rb") as binary_file:
+                data = binary_file.read()
+                pos = 7
+                for i in range(0, 262):
+                    for gain in range(0, 2):
+                        for pixel in range(0, 7):
+                            for cap in range(0, 4096):
+                                value = int.from_bytes(data[pos:pos + 2], byteorder='big')
+                                self.pedestal_value_array[i, gain, pixel, cap] = value
+                                pos += 2
+            self.log.info("Create pedestal array")
+        else:
+            self.log.warning("No pedestal path supplied, "
+                             "r1 samples will equal r0 samples.")
+            self.calibrate = self.fake_calibrate
+
+    def _get_first_capacitor(self, event, nr):
+        hg = 0
+        lg = 1
+        fc = np.zeros((2, 8))
+        first_cap = event.lst.tel[0].evt.first_capacitor_id[nr * 8:(nr + 1) * 8]
+        for i, j in zip([0, 1, 2, 3, 4, 5, 6], [0, 0, 1, 1, 2, 2, 3]):
+            fc[hg, i] = first_cap[j]
+        for i, j in zip([0, 1, 2, 3, 4, 5, 6], [4, 4, 5, 5, 6, 6, 7]):
+            fc[lg, i] = first_cap[j]
+        return fc
+
+
+    def fake_calibrate(self, event):
+        """
+        Don't perform any calibration on the waveforms, just fill the
+        R1 container.
+
+        Parameters
+        ----------
+        event : `ctapipe` event-container
+        """
+
+        if self.check_r0_exists(event, self.telid):
+            samples = event.r0.tel[self.telid].waveform
+            event.r1.tel[self.telid].waveform = samples.astype('float32')
+
+
 class TargetIOR1Calibrator(CameraR1Calibrator):
 
     pedestal_path = Unicode(
@@ -311,6 +398,8 @@ class TargetIOR1Calibrator(CameraR1Calibrator):
             r1 = event.r1.tel[self.telid].waveform[0]
             self.calibrator.ApplyEvent(samples[0], fci, self._r1_wf[0])
             event.r1.tel[self.telid].waveform = self._r1_wf
+
+
 
 
 class CameraR1CalibratorFactory(Factory):
