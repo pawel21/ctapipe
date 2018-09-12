@@ -218,7 +218,6 @@ class LSTR1Calibrator(CameraR1Calibrator):
         kwargs
         """
         super().__init__(config=config, tool=tool, **kwargs)
-        self.log.info(self.pedestal_path)
 
         self.telid = 0
         self.pedestal_value_array = None
@@ -232,26 +231,26 @@ class LSTR1Calibrator(CameraR1Calibrator):
         self._load_calib()
 
     def calibrate(self, event):
-        samples = event.r0.tel[self.telid].waveform
+        samples = np.zeros((event.r0.tel[self.telid].waveform.shape))
         event.r1.tel[self.telid].waveform = samples.astype('float32')
 
         event_number_of_modules = event.lst.tel[0].svc.num_modules
         if event_number_of_modules == self.number_of_modules_from_file:
-            for nr in range(0, event_number_of_modules):
-                first_cap = self._get_first_capacitor(event, nr)
-                for i in range(0, 2):
-                    for j in range(0, self.n_pixels):
-                        for k in range(0, self.roisize):
-                            position = int((k + first_cap[i, j]) % self.size4drs)
-                            val = (event.r0.tel[0].waveform[i, nr * 7:(nr + 1) * 7, k][j] - int(
-                                self.pedestal_value_array[nr, i, j, position])) + self.offset
-                            event.r1.tel[self.telid].waveform[i, nr * 7:(nr + 1) * 7, k][j] = val
-            self.log.info("Calibration done")
+            for nr_module in range(0, event_number_of_modules):
+                first_cap = self._get_first_capacitor(event, nr_module)
+                for gain in range(0, 2):
+                    for pixel in range(0, self.n_pixels):
+                        for roi in range(0, self.roisize):
+                            position = int((roi + first_cap[gain, pixel]) % self.size4drs)
+                            val = (event.r0.tel[0].waveform[gain,  pixel+nr_module*7, roi] - int(
+                                self.pedestal_value_array[nr_module, gain, pixel, position])) + self.offset
+                            event.r1.tel[self.telid].waveform[gain, pixel+nr_module*7, roi] = val
         else:
             self.log.warning("No match number of modules {} in pedestal file,"
                              " to number of modules {} in event-container. Check if path to pedestal file is correct. "
                              "r1 samples will equal r0 samples.".
                              format(self.number_of_modules_from_file, event_number_of_modules))
+            self.fake_calibrate(event)
 
     def _load_calib(self):
         """
@@ -264,9 +263,9 @@ class LSTR1Calibrator(CameraR1Calibrator):
                 data = binary_file.read()
                 file_version = int.from_bytes(data[0:1], byteorder='big')
                 self.number_of_modules_from_file = int.from_bytes(data[7:9], byteorder='big')
-                self.pedestal_value_array = np.zeros((262, 2, 7, 4096))
-                self.log.info("Binary file with pedestal version {}".format(file_version))
-                self.log.info("Number of modules {}".format(self.number_of_modules_from_file))
+                self.pedestal_value_array = np.zeros((self.number_of_modules_from_file, 2, self.n_pixels, self.size4drs))
+                self.log.info("Load binary file with pedestal version {}: {} ".format(file_version, self.pedestal_path))
+                self.log.info("Number of modules in file: {}".format(self.number_of_modules_from_file))
 
                 start_byte = 9
                 for i in range(0, self.number_of_modules_from_file):
@@ -276,23 +275,23 @@ class LSTR1Calibrator(CameraR1Calibrator):
                                 value = int.from_bytes(data[start_byte:start_byte + 2], byteorder='big')
                                 self.pedestal_value_array[i, gain, pixel, cap] = value
                                 start_byte += 2
-            self.log.info("Create pedestal array")
         else:
             self.log.warning("No pedestal path supplied, "
                              "r1 samples will equal r0 samples.")
             self.calibrate = self.fake_calibrate
 
-    def _get_first_capacitor(self, event, nr):
+    def _get_first_capacitor(self, event, nr_module):
         """
-        Get first capacitor value from event for nr module.
+        Get first capacitor values from event for nr module.
 
         Parameters
         ----------
         event : `ctapipe` event-container
-        nr : number of module
+        nr_module : number of module
         """
+
         fc = np.zeros((2, 8))
-        first_cap = event.lst.tel[0].evt.first_capacitor_id[nr * 8:(nr + 1) * 8]
+        first_cap = event.lst.tel[0].evt.first_capacitor_id[nr_module * 8:(nr_module + 1) * 8]
         for i, j in zip([0, 1, 2, 3, 4, 5, 6], [0, 0, 1, 1, 2, 2, 3]):
             fc[self.high_gain, i] = first_cap[j]
         for i, j in zip([0, 1, 2, 3, 4, 5, 6], [4, 4, 5, 5, 6, 6, 7]):
