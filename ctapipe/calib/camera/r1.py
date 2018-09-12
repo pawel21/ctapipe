@@ -320,9 +320,10 @@ class LSTR1Calibrator(CameraR1Calibrator):
         event : `ctapipe` event-container
         """
 
-        if self.check_r0_exists(event, self.telid):
-            samples = event.r0.tel[self.telid].waveform
-            event.r1.tel[self.telid].waveform = samples.astype('float32')
+        for telid in event.r0.tels_with_data:
+            if self.check_r0_exists(event, telid):
+                samples = event.r0.tel[telid].waveform
+                event.r1.tel[telid].waveform = samples.astype('float32')
 
 
 class TargetIOR1Calibrator(CameraR1Calibrator):
