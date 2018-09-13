@@ -231,8 +231,16 @@ class LSTR1Calibrator(CameraR1Calibrator):
         self._load_calib()
 
     def calibrate(self, event):
-        samples = np.zeros((event.r0.tel[self.telid].waveform.shape))
-        event.r1.tel[self.telid].waveform = samples.astype('float32')
+        """
+        Perform calibration on event using pedestal file.
+        If pedestal file is wrong raise ValueError Exception.
+
+        Parameters
+        ----------
+        event : `ctapipe` event-container
+        """
+        samples = np.zeros((event.r0.tel[self.telid].waveform.shape), dtype=np.uint16)
+        event.r1.tel[self.telid].waveform = samples
 
         event_number_of_modules = event.lst.tel[0].svc.num_modules
         if event_number_of_modules == self.number_of_modules_from_file:
@@ -250,13 +258,14 @@ class LSTR1Calibrator(CameraR1Calibrator):
                             event.r1.tel[self.telid].waveform[
                                 gain, pixel + nr_module * 7, roi] = val
         else:
-            self.log.warning("No match number of modules {} in pedestal file,"
-                             " to number of modules {} in event-container."
-                             " Check if path to pedestal file is correct. "
-                             "r1 samples will equal r0 samples.".
+            self.log.error("No match number of modules {} in pedestal file,"
+                             " to number of modules {} in event-container. "
+                             "Check if path to pedestal file is correct. ".
                              format(self.number_of_modules_from_file,
                                     event_number_of_modules))
-            self.fake_calibrate(event)
+
+            raise ValueError("Wrong pedestal file")
+
 
     def _load_calib(self):
         """
@@ -278,6 +287,7 @@ class LSTR1Calibrator(CameraR1Calibrator):
                     self.number_of_modules_from_file))
 
                 start_byte = 9
+
                 for i in range(0, self.number_of_modules_from_file):
                     for gain in range(0, 2):
                         for pixel in range(0, self.n_pixels):
@@ -286,6 +296,7 @@ class LSTR1Calibrator(CameraR1Calibrator):
                                                        byteorder='big')
                                 self.pedestal_value_array[i, gain, pixel, cap] = value
                                 start_byte += 2
+            self.log.info("finish load file")
         else:
             self.log.warning("No pedestal path supplied, "
                              "r1 samples will equal r0 samples.")
