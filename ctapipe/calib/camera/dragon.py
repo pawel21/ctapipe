@@ -119,7 +119,7 @@ class DRS4Pedestal():
             # Read the whole file at once
             data = binary_file.read()
 
-            pos = 7
+            pos = 9
             for i in range(0, self.nr):
                 for gain in range(0, 2):
                     for pixel in range(0, 7):

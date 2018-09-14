@@ -4,6 +4,7 @@ import os
 from ctapipe.io.lsteventsource import LSTEventSource
 from ctapipe.io import EventSeeker
 from ctapipe.calib.camera import DragonPedestal
+from ctapipe.calib.camera.dragon import remove_pedestal
 
 
 def get_first_capacitor(event, nr):
@@ -44,7 +45,7 @@ for i in range(0, 3500):
 
 ped.finalize_pedestal()
 
-for i in range(3500, 3555):
+for i in range(3550, 3555):
     nr = 1
     t = np.linspace(0, 39, 40)
     ev = seeker[i]
