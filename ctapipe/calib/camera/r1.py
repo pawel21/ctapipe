@@ -15,7 +15,7 @@ of the data.
 """
 from abc import abstractmethod
 import numpy as np
-from ...core import Component, Factory
+from ...core import Component, Factory, Provenance
 from ...core.traits import Unicode
 from ...io import EventSource
 
@@ -273,6 +273,7 @@ class LSTR1Calibrator(CameraR1Calibrator):
         pedestal value . If it hasn't then point calibrate to
         fake_calibrate, where nothing is done to the waveform.
         """
+        Provenance().add_input_file(self.pedestal_path)
         if self.pedestal_path:
             with open(self.pedestal_path, "rb") as binary_file:
                 data = binary_file.read()
@@ -287,7 +288,6 @@ class LSTR1Calibrator(CameraR1Calibrator):
                     self.number_of_modules_from_file))
 
                 start_byte = 9
-
                 for i in range(0, self.number_of_modules_from_file):
                     for gain in range(0, 2):
                         for pixel in range(0, self.n_pixels):
@@ -296,7 +296,6 @@ class LSTR1Calibrator(CameraR1Calibrator):
                                                        byteorder='big')
                                 self.pedestal_value_array[i, gain, pixel, cap] = value
                                 start_byte += 2
-            self.log.info("finish load file")
         else:
             self.log.warning("No pedestal path supplied, "
                              "r1 samples will equal r0 samples.")
