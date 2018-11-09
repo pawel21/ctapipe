@@ -113,8 +113,9 @@ class LSTR0Corrections(CameraR0Calibrator):
         self.offset = 300
 
         self.first_cap_array = np.zeros((265, 2, 7))
-        self.first_cap_array_spike_A = np.zeros((265, 2, 7))
+        self.first_cap_array_spike = np.zeros((265, 2, 7))
         self.first_cap_old_array = np.zeros((265, 2, 7))
+        self.first_cap_array_time_lapse = np.zeros((265, 2, 7))
 
         self.last_time_array = np.zeros((265, 2, 7, 4096))
 
@@ -129,43 +130,27 @@ class LSTR0Corrections(CameraR0Calibrator):
                                                                         number_of_modules)
 
 
-    def interpolate_spike_A(self, event):
-        self.first_cap_old_array[:, :, :] = self.first_cap_array_spike_A[:, :, :]
+    def interpolate_spike(self, event):
+        self.first_cap_old_array[:, :, :] = self.first_cap_array_spike[:, :, :]
 
         number_of_modules = event.lst.tel[0].svc.num_modules
 
         waveform = event.r0.tel[0].waveform[:, : , :]
 
         for nr_clus in range(0, number_of_modules):
-            self.first_cap_array_spike_A[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
+            self.first_cap_array_spike[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
 
         wf = waveform.copy()
         wf = wf.astype('int16')
-        event.r0.tel[0].waveform = self.interpolate_pseudo_pulses(wf, self.first_cap_array_spike_A,
+        event.r0.tel[0].waveform = self.interpolate_pseudo_pulses(wf, self.first_cap_array_spike,
                                                                   self.first_cap_old_array, number_of_modules)
-
-
-        #    for gain in range(0, 2):
-        #        for pixel in range(0, 7):
-        #            for k in range(0, 4):
-        #                # looking for spike A first case
-        #                abspos = int(1024 - self.roisize - 2 - self.first_cap_old_array[nr_clus, gain, pixel] + k*1024 + self.size4drs)
-        #                pos = int((abspos - self.first_cap_array_spike_A[nr_clus, gain, pixel] + self.size4drs) % self.size4drs)
-        #                if (pos > 2 and pos < 38):
-        #                    self.inter_spike_A(event, gain, pos, pixel, nr_clus)
-
-        #                # looking for spike A second case
-        #                abspos = int(self.roisize - 2 + self.first_cap_old_array[nr_clus, gain, pixel] + k * 1024 + self.size4drs)
-        #                pos = int((abspos - self.first_cap_array_spike_A[nr_clus, gain, pixel] + self.size4drs) % self.size4drs)
-        #                if (pos > 2 and pos < 38):
-        #                    self.inter_spike_A(event, gain, pos, pixel, nr_clus)
 
     @staticmethod
     @njit(parallel=True)
     def interpolate_pseudo_pulses(waveform, fc, fc_old, number_of_modules):
         roisize = 40
         size4drs = 4096
-        #waveform = waveform.astype('int16')
+
         for nr_clus in prange(0, number_of_modules):
             for gain in prange(0, 2):
                  for pixel in prange(0, 7):
@@ -180,17 +165,11 @@ class LSTR0Corrections(CameraR0Calibrator):
                         if (pos > 2 and pos < 38):
                             fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus)
 
+                    spike_b_pos = int((fc_old[nr_clus, gain, pixel] - 1 - fc[nr_clus, gain, pixel] + 2*size4drs)%size4drs)
+                    if spike_b_pos < roisize - 1:
+                        fun_to_interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus)
 
         return waveform
-
-    def inter_spike_A(self, event, gain, pos, pixel, nr_clus):
-        samples = event.r0.tel[0].waveform[gain, pixel + nr_clus * 7, :]
-        a = int(samples[pos - 1])
-        b = int(samples[pos + 2])
-        value1 = samples[pos - 1] + (0.33 * (b - a))
-        value2 = samples[pos - 1] + (0.66 * (b - a))
-        event.r0.tel[0].waveform[gain, pixel + nr_clus * 7, pos] = value1
-        event.r0.tel[0].waveform[gain, pixel + nr_clus * 7, pos + 1] = value2
 
     @staticmethod
     @jit(parallel=True)
@@ -205,6 +184,15 @@ class LSTR0Corrections(CameraR0Calibrator):
                         (event_waveform[gain, pixel + nr * 7, :] -
                          pedestal_value_array[nr, gain, pixel, position:position + 40])
         return ev_waveform
+
+    def time_lapse_corr(self, event):
+        EVB = event.lst.tel[0].evt.counters
+        number_of_modules = event.lst.tel[0].svc.num_modules
+        for nr_clus in range(0, number_of_modules):
+            self.first_cap_array_time_lapse[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
+
+        do_time_lapse_corr(event.r0.tel[0].waveform, EVB,
+                           self.first_cap_array_time_lapse, self.last_time_array, number_of_modules)
 
     def _load_calib(self):
         """
@@ -281,3 +269,34 @@ def fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
     value2 = (samples[pos - 1]) + (0.66 * (b - a))
     waveform[gain, pixel + nr_clus * 7, pos] = value1
     waveform[gain, pixel + nr_clus * 7, pos + 1] = value2
+
+@jit
+def fun_to_interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus):
+    samples = waveform[gain, pixel + nr_clus * 7, :]
+    value = 0.5 * (samples[spike_b_pos - 1] + samples[spike_b_pos + 1])
+    waveform[gain, pixel + nr_clus * 7, spike_b_pos] = value
+
+@jit(parallel=True)
+def do_time_lapse_corr(waveform, EVB, fc, last_time_array, number_of_modules):
+    size4drs = 4096
+    for nr_clus in prange(0, number_of_modules):
+        time_now = int64(EVB[14 + (nr_clus * 22): 22 + (nr_clus * 22)])
+        for gain in prange(0, 2):
+            for pixel in prange(0, 7):
+                for k in prange(0, 40):
+                    posads = int((k + fc[nr_clus, gain, pixel]) % size4drs)
+                    if last_time_array[nr_clus, gain, pixel, posads] > 0:
+                        time_diff = time_now - last_time_array[nr_clus, gain, pixel, posads]
+                        val = waveform[gain, pixel + nr_clus * 7, k] - ped_time(time_diff / (133.e3))
+                        waveform[gain, pixel + nr_clus * 7, k] = val
+                    if (k < 39):
+                        last_time_array[nr_clus, gain, pixel, posads] = time_now
+
+@jit
+def int64(x):
+    return x[0] + x[1] * 256 + x[2] * 256 ** 2 + x[3] * 256 ** 3 + x[4] * 256 ** 4 + x[5] * 256 ** 5 + x[
+            6] * 256 ** 6 + x[7] * 256 ** 7
+
+@jit
+def ped_time(timediff):
+    return 29.3 * np.power(timediff, -0.2262) - 12.4
