@@ -5,14 +5,10 @@ from ...io import EventSource
 
 from numba import jit, njit, prange
 
-from ctapipe.core import Component
-from ctapipe.core.traits import Unicode
-
-import matplotlib.pyplot as plt
 
 class CameraR0Calibrator(Component):
     """
-    The base R0-level calibrator. Fills the r0 container.
+    The base R0-level calibrator. Change the r0 container.
     The R0 calibrator performs the camera-specific R0 calibration that is
     usually performed on the raw data by the camera server. This calibrator
     exists in ctapipe for testing and prototyping purposes.
@@ -45,33 +41,7 @@ class CameraR0Calibrator(Component):
         kwargs
         """
         super().__init__(config=config, parent=tool, **kwargs)
-        self._r0_empty_warn = False
 
-
-    def check_r0_exists(self, event, telid):
-        """
-        Check that r0 data exists. If it does not, then do not change r0.
-        This ensures that if the containers were filled from a file containing
-        r0 data, it is not overwritten by non-existant data.
-        Parameters
-        ----------
-        event : container
-            A `ctapipe` event container
-        telid : int
-            The telescope id.
-        Returns
-        -------
-        bool
-            True if r0.tel[telid].waveform is not None, else false.
-        """
-        r0 = event.r0.tel[telid].waveform
-        if r0 is not None:
-            return True
-        else:
-            if not self._r0_empty_warn:
-                self.log.warning("Encountered an event with no R0 data. ")
-                self._r0_empty_warn = True
-        return False
 
 
 class LSTR0Corrections(CameraR0Calibrator):
@@ -124,22 +94,20 @@ class LSTR0Corrections(CameraR0Calibrator):
         for nr_module in range(0, number_of_modules):
             self.first_cap_array[nr_module, :, :] = self._get_first_capacitor(event, nr_module)
 
-        event.r0.tel[self.telid].waveform[:, :, :] = self.calibrate_jit(event.r0.tel[self.telid].waveform,
-                                                                        self.first_cap_array,
-                                                                        self.pedestal_value_array,
-                                                                        number_of_modules)
+        event.r0.tel[self.telid].waveform[:, :, :] = calibrate_jit(
+            event.r0.tel[self.telid].waveform,
+            self.first_cap_array,
+            self.pedestal_value_array,
+            number_of_modules)
 
 
     def interpolate_spike(self, event):
         self.first_cap_old_array[:, :, :] = self.first_cap_array_spike[:, :, :]
-
         number_of_modules = event.lst.tel[0].svc.num_modules
-
-        waveform = event.r0.tel[0].waveform[:, : , :]
-
         for nr_clus in range(0, number_of_modules):
             self.first_cap_array_spike[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
 
+        waveform = event.r0.tel[0].waveform[:, :, :]
         wf = waveform.copy()
         wf = wf.astype('int16')
         event.r0.tel[0].waveform = self.interpolate_pseudo_pulses(wf, self.first_cap_array_spike,
@@ -170,20 +138,6 @@ class LSTR0Corrections(CameraR0Calibrator):
                         fun_to_interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus)
 
         return waveform
-
-    @staticmethod
-    @jit(parallel=True)
-    def calibrate_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
-        ev_waveform = np.zeros(event_waveform.shape)
-        size4drs = 4096
-        for nr in prange(0, nr_clus):
-            for gain in prange(0, 2):
-                for pixel in prange(0, 7):
-                    position = int((fc_cap[nr, gain, pixel]) % size4drs)
-                    ev_waveform[gain, pixel + nr * 7, :] = \
-                        (event_waveform[gain, pixel + nr * 7, :] -
-                         pedestal_value_array[nr, gain, pixel, position:position + 40])
-        return ev_waveform
 
     def time_lapse_corr(self, event):
         EVB = event.lst.tel[0].evt.counters
@@ -259,6 +213,22 @@ class LSTR0Corrections(CameraR0Calibrator):
             if self.check_r0_exists(event, telid):
                 samples = event.r0.tel[telid].waveform
                 event.r0.tel[telid].waveform = samples.astype('uint16')
+
+
+@jit(parallel=True)
+def calibrate_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
+    waveform = np.zeros(event_waveform.shape)
+    size4drs = 4096
+    N_gain = 2
+    N_pixel = 7
+    for nr in prange(0, nr_clus):
+        for gain in prange(0, N_gain):
+            for pixel in prange(0, N_pixel):
+                position = int((fc_cap[nr, gain, pixel]) % size4drs)
+                waveform[gain, pixel + nr * 7, :] = \
+                    (event_waveform[gain, pixel + nr * 7, :] -
+                    pedestal_value_array[nr, gain, pixel, position:position + 40])
+    return waveform
 
 @jit
 def fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
