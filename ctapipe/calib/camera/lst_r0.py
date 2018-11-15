@@ -27,7 +27,7 @@ class CameraR0Calibrator(Component):
 
     def __init__(self, config=None, tool=None, **kwargs):
         """
-        Parent class for the r0 calibrators. Fills the r0 container.
+        Parent class for the r0 calibrators. Change the r0 container.
         Parameters
         ----------
         config : traitlets.loader.Config
@@ -45,6 +45,9 @@ class CameraR0Calibrator(Component):
 
 
 class LSTR0Corrections(CameraR0Calibrator):
+    """
+    The R0 calibrator class for LST Camera.
+    """
 
     pedestal_path = Unicode(
         '',
@@ -55,7 +58,7 @@ class LSTR0Corrections(CameraR0Calibrator):
     def __init__(self, config=None, tool=None, **kwargs):
         """
         The R0 calibrator for LST data.
-        Fills the r0 container.
+        Change the r0 container.
         Parameters
         ----------
         config : traitlets.loader.Config
@@ -90,11 +93,17 @@ class LSTR0Corrections(CameraR0Calibrator):
         self.last_time_array = np.zeros((265, 2, 7, 4096))
 
     def subtract_pedestal(self, event):
+        """
+        Subtracts cell offset using pedestal file.
+        Parameters
+        ----------
+        event : `ctapipe` event-container
+        """
         number_of_modules = event.lst.tel[0].svc.num_modules
         for nr_module in range(0, number_of_modules):
             self.first_cap_array[nr_module, :, :] = self._get_first_capacitor(event, nr_module)
 
-        event.r0.tel[self.telid].waveform[:, :, :] = calibrate_jit(
+        event.r0.tel[self.telid].waveform[:, :, :] = subtract_pedestal_jit(
             event.r0.tel[self.telid].waveform,
             self.first_cap_array,
             self.pedestal_value_array,
@@ -102,6 +111,13 @@ class LSTR0Corrections(CameraR0Calibrator):
 
 
     def interpolate_spike(self, event):
+        """
+        Interpolates spike A & B and change the R0 container.
+
+        Parameters
+        ----------
+        event : `ctapipe` event-container
+        """
         self.first_cap_old_array[:, :, :] = self.first_cap_array_spike[:, :, :]
         number_of_modules = event.lst.tel[0].svc.num_modules
         for nr_clus in range(0, number_of_modules):
@@ -115,31 +131,57 @@ class LSTR0Corrections(CameraR0Calibrator):
 
     @staticmethod
     @njit(parallel=True)
-    def interpolate_pseudo_pulses(waveform, fc, fc_old, number_of_modules):
+    def interpolate_pseudo_pulses(waveform, fc, fc_old, n_clus):
+        """
+        Interpolate Spike A & B and change the R0 container.
+
+        Parameters
+        ----------
+        waveform : ndarray
+            Waveform stored in a numpy array of shape
+            (n_gain, n_pix, n_samples).
+        fc : ndarray
+            Value of first capacitor stored in a numpy array of shape
+            (n_clus, n_gain, n_pix).
+        fc_old : ndarray
+            Value of first capacitor from previous event
+            stored in a numpy array of shape
+            (n_clus, n_gain, n_pix).
+        n_clus : int
+            Number of clusters
+        """
+
         roisize = 40
         size4drs = 4096
-
-        for nr_clus in prange(0, number_of_modules):
-            for gain in prange(0, 2):
-                 for pixel in prange(0, 7):
+        n_gain = 2
+        n_pix = 7
+        for nr_clus in prange(0, n_clus):
+            for gain in prange(0, n_gain):
+                 for pixel in prange(0, n_pix):
                     for k in prange(0, 4):
                         # looking for spike A first case
                         abspos = int(1024 - roisize - 2 - fc_old[nr_clus, gain, pixel] + k*1024 + size4drs)
-                        pos = int((abspos - fc[nr_clus, gain, pixel] + size4drs) % size4drs)
-                        if (pos > 2 and pos < 38):
-                            fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus)
+                        spike_A_position = int((abspos - fc[nr_clus, gain, pixel] + size4drs) % size4drs)
+                        if (spike_A_position > 2 and spike_A_position < 38):
+                            interpolate_spike_A(waveform, gain, spike_A_position, pixel, nr_clus)
                         abspos = int(roisize - 2 + fc_old[nr_clus, gain, pixel] + k * 1024 + size4drs)
-                        pos = int((abspos - fc[nr_clus, gain, pixel] + size4drs) % size4drs)
-                        if (pos > 2 and pos < 38):
-                            fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus)
+                        spike_A_position = int((abspos - fc[nr_clus, gain, pixel] + size4drs) % size4drs)
+                        if (spike_A_position > 2 and spike_A_position < 38):
+                            interpolate_spike_A(waveform, gain, spike_A_position, pixel, nr_clus)
 
                     spike_b_pos = int((fc_old[nr_clus, gain, pixel] - 1 - fc[nr_clus, gain, pixel] + 2*size4drs)%size4drs)
                     if spike_b_pos < roisize - 1:
-                        fun_to_interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus)
+                        interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus)
 
         return waveform
 
     def time_lapse_corr(self, event):
+        """
+        Perform time lapse corrections.
+        Parameters
+        ----------
+        event : `ctapipe` event-container
+        """
         EVB = event.lst.tel[0].evt.counters
         number_of_modules = event.lst.tel[0].svc.num_modules
         for nr_clus in range(0, number_of_modules):
@@ -202,8 +244,7 @@ class LSTR0Corrections(CameraR0Calibrator):
 
     def fake_calibrate(self, event):
         """
-        Don't perform any calibration on the waveforms, just fill the
-        R1 container.
+        Don't perform any calibration on the waveforms.
         Parameters
         ----------
         event : `ctapipe` event-container
@@ -214,16 +255,15 @@ class LSTR0Corrections(CameraR0Calibrator):
                 samples = event.r0.tel[telid].waveform
                 event.r0.tel[telid].waveform = samples.astype('uint16')
 
-
 @jit(parallel=True)
-def calibrate_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
+def subtract_pedestal_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
     waveform = np.zeros(event_waveform.shape)
     size4drs = 4096
-    N_gain = 2
-    N_pixel = 7
+    n_gain = 2
+    n_pixel = 7
     for nr in prange(0, nr_clus):
-        for gain in prange(0, N_gain):
-            for pixel in prange(0, N_pixel):
+        for gain in prange(0, n_gain):
+            for pixel in prange(0, n_pixel):
                 position = int((fc_cap[nr, gain, pixel]) % size4drs)
                 waveform[gain, pixel + nr * 7, :] = \
                     (event_waveform[gain, pixel + nr * 7, :] -
@@ -231,7 +271,7 @@ def calibrate_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
     return waveform
 
 @jit
-def fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
+def interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
     samples = waveform[gain, pixel + nr_clus * 7, :]
     a = int(samples[pos - 1])
     b = int(samples[pos + 2])
@@ -241,7 +281,7 @@ def fun_to_interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
     waveform[gain, pixel + nr_clus * 7, pos + 1] = value2
 
 @jit
-def fun_to_interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus):
+def interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus):
     samples = waveform[gain, pixel + nr_clus * 7, :]
     value = 0.5 * (samples[spike_b_pos - 1] + samples[spike_b_pos + 1])
     waveform[gain, pixel + nr_clus * 7, spike_b_pos] = value
