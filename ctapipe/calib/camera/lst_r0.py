@@ -1,7 +1,7 @@
 import numpy as np
+from astropy.io import fits
 from ...core import Component, Factory
 from ...core.traits import Unicode
-from ...io import EventSource
 
 from numba import jit, njit, prange
 
@@ -73,24 +73,23 @@ class LSTR0Corrections(CameraR0Calibrator):
         """
         super().__init__(config=config, tool=tool, **kwargs)
         self.telid = 0
-        self.pedestal_value_array = None
-        self.n_pixels = 7
+        self.n_pix = 7
         self.size4drs = 4 * 1024
         self.roisize = 40
         self.offset = 300
         self.high_gain = 0
         self.low_gain = 1
-
-        self._load_calib()
-
         self.offset = 300
+
+        self.pedestal_value_array = None
 
         self.first_cap_array = np.zeros((265, 2, 7))
         self.first_cap_array_spike = np.zeros((265, 2, 7))
         self.first_cap_old_array = np.zeros((265, 2, 7))
         self.first_cap_array_time_lapse = np.zeros((265, 2, 7))
-
         self.last_time_array = np.zeros((265, 2, 7, 4096))
+
+
 
     def subtract_pedestal(self, event):
         """
@@ -99,18 +98,19 @@ class LSTR0Corrections(CameraR0Calibrator):
         ----------
         event : `ctapipe` event-container
         """
-        number_of_modules = event.lst.tel[0].svc.num_modules
-        for nr_module in range(0, number_of_modules):
+        self._load_calib()
+        n_modules = event.lst.tel[0].svc.num_modules
+        for nr_module in range(0, n_modules):
             self.first_cap_array[nr_module, :, :] = self._get_first_capacitor(event, nr_module)
 
         event.r0.tel[self.telid].waveform[:, :, :] = subtract_pedestal_jit(
             event.r0.tel[self.telid].waveform,
             self.first_cap_array,
             self.pedestal_value_array,
-            number_of_modules)
+            n_modules)
 
 
-    def interpolate_spike(self, event):
+    def interpolate_spikes(self, event):
         """
         Interpolates spike A & B and change the R0 container.
 
@@ -119,19 +119,21 @@ class LSTR0Corrections(CameraR0Calibrator):
         event : `ctapipe` event-container
         """
         self.first_cap_old_array[:, :, :] = self.first_cap_array_spike[:, :, :]
-        number_of_modules = event.lst.tel[0].svc.num_modules
-        for nr_clus in range(0, number_of_modules):
-            self.first_cap_array_spike[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
+        n_modules = event.lst.tel[0].svc.num_modules
+        for nr_module in range(0, n_modules):
+            self.first_cap_array_spike[nr_module, :, :] = self._get_first_capacitor(event, nr_module)
 
         waveform = event.r0.tel[0].waveform[:, :, :]
         wf = waveform.copy()
         wf = wf.astype('int16')
-        event.r0.tel[0].waveform = self.interpolate_pseudo_pulses(wf, self.first_cap_array_spike,
-                                                                  self.first_cap_old_array, number_of_modules)
+        event.r0.tel[0].waveform = self.interpolate_pseudo_pulses(wf,
+                                                                  self.first_cap_array_spike,
+                                                                  self.first_cap_old_array,
+                                                                  n_modules)
 
     @staticmethod
     @njit(parallel=True)
-    def interpolate_pseudo_pulses(waveform, fc, fc_old, n_clus):
+    def interpolate_pseudo_pulses(waveform, fc, fc_old, n_modules):
         """
         Interpolate Spike A & B and change the R0 container.
 
@@ -147,7 +149,7 @@ class LSTR0Corrections(CameraR0Calibrator):
             Value of first capacitor from previous event
             stored in a numpy array of shape
             (n_clus, n_gain, n_pix).
-        n_clus : int
+        n_modules : int
             Number of clusters
         """
 
@@ -155,7 +157,7 @@ class LSTR0Corrections(CameraR0Calibrator):
         size4drs = 4096
         n_gain = 2
         n_pix = 7
-        for nr_clus in prange(0, n_clus):
+        for nr_clus in prange(0, n_modules):
             for gain in prange(0, n_gain):
                  for pixel in prange(0, n_pix):
                     for k in prange(0, 4):
@@ -169,9 +171,9 @@ class LSTR0Corrections(CameraR0Calibrator):
                         if (spike_A_position > 2 and spike_A_position < 38):
                             interpolate_spike_A(waveform, gain, spike_A_position, pixel, nr_clus)
 
-                    spike_b_pos = int((fc_old[nr_clus, gain, pixel] - 1 - fc[nr_clus, gain, pixel] + 2*size4drs)%size4drs)
-                    if spike_b_pos < roisize - 1:
-                        interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus)
+                    spike_b_position = int((fc_old[nr_clus, gain, pixel] - 1 - fc[nr_clus, gain, pixel] + 2*size4drs)%size4drs)
+                    if spike_b_position < roisize - 1:
+                        interpolate_spike_B(waveform, gain, spike_b_position, pixel, nr_clus)
 
         return waveform
 
@@ -183,12 +185,12 @@ class LSTR0Corrections(CameraR0Calibrator):
         event : `ctapipe` event-container
         """
         EVB = event.lst.tel[0].evt.counters
-        number_of_modules = event.lst.tel[0].svc.num_modules
-        for nr_clus in range(0, number_of_modules):
+        n_modules = event.lst.tel[0].svc.num_modules
+        for nr_clus in range(0, n_modules):
             self.first_cap_array_time_lapse[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
 
         do_time_lapse_corr(event.r0.tel[0].waveform, EVB,
-                           self.first_cap_array_time_lapse, self.last_time_array, number_of_modules)
+                           self.first_cap_array_time_lapse, self.last_time_array, n_modules)
 
     def _load_calib(self):
         """
@@ -198,28 +200,13 @@ class LSTR0Corrections(CameraR0Calibrator):
         """
 
         if self.pedestal_path:
-            with open(self.pedestal_path, "rb") as binary_file:
-                data = binary_file.read()
-                file_version = int.from_bytes(data[0:1], byteorder='big')
-                self.number_of_clusters_from_file = int.from_bytes(data[7:9],
-                                                                   byteorder='big')
-                self.pedestal_value_array = np.zeros((self.number_of_clusters_from_file, 2,
-                                                      self.n_pixels, self.size4drs + 40))
-                self.log.info("Load binary file with pedestal version {}: {} ".format(
-                    file_version, self.pedestal_path))
-                self.log.info("Number of modules in file: {}".format(
-                    self.number_of_clusters_from_file))
-
-                start_byte = 9
-                for i in range(0, self.number_of_clusters_from_file):
-                    for gain in range(0, 2):
-                        for pixel in range(0, self.n_pixels):
-                            for cap in range(0, self.size4drs):
-                                value = int.from_bytes(data[start_byte:start_byte + 2],
-                                                       byteorder='big') - self.offset
-                                self.pedestal_value_array[i, gain, pixel, cap] = value
-                                start_byte += 2
-                            self.pedestal_value_array[i, gain, pixel, self.size4drs:self.size4drs+40] = self.pedestal_value_array[i, gain, pixel, 0:40]
+            with fits.open(self.pedestal_path) as f:
+                n_modules = f[0].header['NAXIS4']
+                self.pedestal_value_array = np.zeros((n_modules, 2, 7, 4136))
+                pedestal_data = f[0].data
+                self.pedestal_value_array[:, :, :, :self.size4drs] = pedestal_data - self.offset
+                self.pedestal_value_array[:, :, :, self.size4drs:self.size4drs + 40] \
+                    = pedestal_data[:, :, :, 0:40] - self.offset
         else:
             self.log.warning("No pedestal path supplied, "
                              "r0 samples will equal r0 samples.")
@@ -260,10 +247,10 @@ def subtract_pedestal_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus)
     waveform = np.zeros(event_waveform.shape)
     size4drs = 4096
     n_gain = 2
-    n_pixel = 7
+    n_pix = 7
     for nr in prange(0, nr_clus):
         for gain in prange(0, n_gain):
-            for pixel in prange(0, n_pixel):
+            for pixel in prange(0, n_pix):
                 position = int((fc_cap[nr, gain, pixel]) % size4drs)
                 waveform[gain, pixel + nr * 7, :] = \
                     (event_waveform[gain, pixel + nr * 7, :] -
@@ -275,16 +262,13 @@ def interpolate_spike_A(waveform, gain, pos, pixel, nr_clus):
     samples = waveform[gain, pixel + nr_clus * 7, :]
     a = int(samples[pos - 1])
     b = int(samples[pos + 2])
-    value1 = (samples[pos - 1]) + (0.33 * (b - a))
-    value2 = (samples[pos - 1]) + (0.66 * (b - a))
-    waveform[gain, pixel + nr_clus * 7, pos] = value1
-    waveform[gain, pixel + nr_clus * 7, pos + 1] = value2
+    waveform[gain, pixel + nr_clus * 7, pos] = (samples[pos - 1]) + (0.33 * (b - a))
+    waveform[gain, pixel + nr_clus * 7, pos + 1] = (samples[pos - 1]) + (0.66 * (b - a))
 
 @jit
-def interpolate_spike_B(waveform, gain, spike_b_pos, pixel, nr_clus):
+def interpolate_spike_B(waveform, gain, pos, pixel, nr_clus):
     samples = waveform[gain, pixel + nr_clus * 7, :]
-    value = 0.5 * (samples[spike_b_pos - 1] + samples[spike_b_pos + 1])
-    waveform[gain, pixel + nr_clus * 7, spike_b_pos] = value
+    waveform[gain, pixel + nr_clus * 7, pos] = 0.5 * (samples[pos - 1] + samples[pos + 1])
 
 @jit(parallel=True)
 def do_time_lapse_corr(waveform, EVB, fc, last_time_array, number_of_modules):
