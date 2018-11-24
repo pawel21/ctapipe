@@ -73,6 +73,8 @@ class LSTR0Corrections(CameraR0Calibrator):
         """
         super().__init__(config=config, tool=tool, **kwargs)
         self.telid = 0
+        self.n_module = 265
+        self.n_gain = 2
         self.n_pix = 7
         self.size4drs = 4 * 1024
         self.roisize = 40
@@ -83,13 +85,13 @@ class LSTR0Corrections(CameraR0Calibrator):
 
         self.pedestal_value_array = None
 
-        self.first_cap_array = np.zeros((265, 2, 7))
-        self.first_cap_array_spike = np.zeros((265, 2, 7))
-        self.first_cap_old_array = np.zeros((265, 2, 7))
-        self.first_cap_array_time_lapse = np.zeros((265, 2, 7))
-        self.last_time_array = np.zeros((265, 2, 7, 4096))
+        self.first_cap_array = np.zeros((self.n_module, self.n_gain, self.n_pix))
+        self.first_cap_array_spike = np.zeros((self.n_module, self.n_gain, self.n_pix))
+        self.first_cap_old_array = np.zeros((self.n_module, self.n_gain, self.n_pix))
+        self.first_cap_time_lapse_array = np.zeros((self.n_module, self.n_gain, self.n_pix))
+        self.last_reading_time_array = np.zeros((self.n_module, self.n_gain, self.n_pix, self.size4drs))
 
-
+        self._load_calib()
 
     def subtract_pedestal(self, event):
         """
@@ -98,7 +100,6 @@ class LSTR0Corrections(CameraR0Calibrator):
         ----------
         event : `ctapipe` event-container
         """
-        self._load_calib()
         n_modules = event.lst.tel[0].svc.num_modules
         for nr_module in range(0, n_modules):
             self.first_cap_array[nr_module, :, :] = self._get_first_capacitor(event, nr_module)
@@ -150,7 +151,7 @@ class LSTR0Corrections(CameraR0Calibrator):
             stored in a numpy array of shape
             (n_clus, n_gain, n_pix).
         n_modules : int
-            Number of clusters
+            Number of modules
         """
 
         roisize = 40
@@ -187,10 +188,10 @@ class LSTR0Corrections(CameraR0Calibrator):
         EVB = event.lst.tel[0].evt.counters
         n_modules = event.lst.tel[0].svc.num_modules
         for nr_clus in range(0, n_modules):
-            self.first_cap_array_time_lapse[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
+            self.first_cap_time_lapse_array[nr_clus, :, :] = self._get_first_capacitor(event, nr_clus)
 
         do_time_lapse_corr(event.r0.tel[0].waveform, EVB,
-                           self.first_cap_array_time_lapse, self.last_time_array, n_modules)
+                           self.first_cap_time_lapse_array, self.last_reading_time_array, n_modules)
 
     def _load_calib(self):
         """
@@ -243,12 +244,29 @@ class LSTR0Corrections(CameraR0Calibrator):
                 event.r0.tel[telid].waveform = samples.astype('uint16')
 
 @jit(parallel=True)
-def subtract_pedestal_jit(event_waveform, fc_cap, pedestal_value_array, nr_clus):
+def subtract_pedestal_jit(event_waveform, fc_cap, pedestal_value_array, n_modules):
+    """
+    Subtract pedestal using jit with parallel execution.
+    Parameters
+        ----------
+        event_waveform : ndarray
+            Waveform stored in a numpy array of shape
+            (n_gain, n_pix, n_samples).
+        fc_cap : ndarray
+            Value of first capacitor stored in a numpy array of shape
+            (n_clus, n_gain, n_pix).
+        pedestal_value_array : ndarray
+            Value of the baseline value.
+            stored in a numpy array of shape
+            (n_module, n_gain, size4drs).
+        n_modules : int
+            Number of modules
+    """
     waveform = np.zeros(event_waveform.shape)
     size4drs = 4096
     n_gain = 2
     n_pix = 7
-    for nr in prange(0, nr_clus):
+    for nr in prange(0, n_modules):
         for gain in prange(0, n_gain):
             for pixel in prange(0, n_pix):
                 position = int((fc_cap[nr, gain, pixel]) % size4drs)
@@ -294,3 +312,7 @@ def int64(x):
 @jit
 def ped_time(timediff):
     return 29.3 * np.power(timediff, -0.2262) - 12.4
+
+@jit
+def binary_converter(arr):
+    return np.sum(arr*256**np.arange(0, 8))
